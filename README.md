@@ -14,7 +14,7 @@ YouTube Data Harvesting and Warehousing is a Python script that leverages the Yo
 1. **Clone the Repository**:
 
    ```bash
-   git clone https://github.com/your-username/youtube-data-harvesting-warehousing.git
+   git clone https://github.com/SaravananPT/YouTube-Data-Harvesting-and-Warehousing
    ```
 
 2. **Install Dependencies**:
