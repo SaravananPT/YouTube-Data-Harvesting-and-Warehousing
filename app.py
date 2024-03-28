@@ -4,11 +4,12 @@ import pymongo
 import mysql.connector
 import pandas as pd
 import streamlit as st
+import pprint
+
 
 class YouTubeChannelAnalyzer:
     def __init__(self):
         self.youtube = None  # Initialize youtube object
-
 
     def authenticate(self, api_key):
         self.youtube = googleapiclient.discovery.build("youtube", "v3", developerKey=api_key)
@@ -48,7 +49,7 @@ class YouTubeChannelAnalyzer:
                     'video_count': item['statistics'].get('videoCount', 'N/A'),
                     'view_count': item['statistics'].get('viewCount', 'N/A'),
                     'subs_count': item['statistics'].get('subscriberCount', 'N/A'),
-                    'publish_date': item['snippet'].get('publishedAt', 'N/A').split('T')[0].replace('-',''),
+                    'publish_date': item['snippet'].get('publishedAt', 'N/A').split('T')[0].replace('-', ''),
                     'description': item['snippet'].get('description', 'N/A'),
                     'hidden_subs_count': item['statistics'].get('hiddenSubscriberCount', False)
                 }
@@ -206,7 +207,8 @@ class YouTubeChannelAnalyzer:
                             comment_id = item['snippet']['topLevelComment']['id']
                             commenter_name = item['snippet']['topLevelComment']['snippet']['authorDisplayName']
                             comment_text = item['snippet']['topLevelComment']['snippet']['textDisplay']
-                            comment_published_at = item['snippet']['topLevelComment']['snippet'].get('publishedAt','N/A').replace('Z', '').replace('T', ' ')
+                            comment_published_at = (item['snippet']['topLevelComment']['snippet']
+                                                    .get('publishedAt', 'N/A').replace('Z', '').replace('T', ' '))
 
                             video_comments.append({
                                 "comment_id": comment_id,
@@ -235,7 +237,7 @@ class YouTubeChannelAnalyzer:
                 playlist_ids = self.get_all_playlist_ids(channel_id)
                 if playlist_ids:
                     output[channel_name]['playlist_ids'] = playlist_ids
-                    video_ids = self.video_ids_from_playlist(playlist_ids)
+                    video_ids = self.video_ids_from_playlist([playlist['playlist_id'] for playlist in playlist_ids])
                     output[channel_name]['video_ids'] = video_ids
 
                     video_details = self.get_video_details(video_ids, channel_id)
@@ -244,6 +246,14 @@ class YouTubeChannelAnalyzer:
                     video_comments = self.get_video_comments(video_ids)
                     output[channel_name]['video_comments'] = video_comments
 
+                    video_ids = self.video_ids_from_channel(channel_id)
+                    output[channel_name]['video_ids'] = video_ids
+
+                    video_details = self.get_video_details(video_ids, channel_id)
+                    output[channel_name]['video_details'] = video_details
+
+                    video_comments = self.get_video_comments(video_ids)
+                    output[channel_name]['video_comments'] = video_comments
                 else:
                     video_ids = self.video_ids_from_channel(channel_id)
                     output[channel_name]['video_ids'] = video_ids
@@ -258,26 +268,31 @@ class YouTubeChannelAnalyzer:
                 output[channel_name]['channel_details'] = channel_details
             else:
                 output[channel_name] = "Channel not found."
+        pprint.pprint(output)
         return output
 
-    def insert_data_to_mongodb(self, output, mongo_uri, mongodb_DB_name):
+    def insert_data_to_mongodb(self, output, mongo_uri, mongodb_db_name):
         try:
             mongo_client = pymongo.MongoClient(mongo_uri)
-            db = mongo_client[mongodb_DB_name]
+            db = mongo_client[mongodb_db_name]
 
             for channel_name, data in output.items():
-                db.channels.insert_one(data['channel_details'])
+                try:
+                    db.channels.insert_one(data['channel_details'])
 
-                if 'playlist_ids' in data:
-                    db.playlists.insert_many(data['playlist_ids'])
+                    if 'playlist_ids' in data:
+                        db.playlists.insert_many(data['playlist_ids'])
 
-                if 'video_details' in data:
-                    db.videos.insert_many(data['video_details'])
+                    if 'video_details' in data:
+                        db.videos.insert_many(data['video_details'])
 
-                if 'video_comments' in data and isinstance(data['video_comments'], list) and data['video_comments']:
-                    db.comments.insert_many(data['video_comments'])
+                    if 'video_comments' in data and isinstance(data['video_comments'], list) and data['video_comments']:
+                        db.comments.insert_many(data['video_comments'])
 
-                print(channel_name, '- all details inserted to MongoDB Atlas')
+                    print(channel_name, '- all details inserted to MongoDB Atlas')
+                except Exception as e:
+                    print(f"An error occurred while inserting data for channel '{channel_name}':", e)
+
         except Exception as e:
             print("An error occurred while inserting data to MongoDB Atlas:", e)
 
@@ -360,21 +375,21 @@ class YouTubeChannelAnalyzer:
 
         print("Tables created successfully in AWS RDS MySQL database.")
 
-    def import_data_to_mysql(self, mongo_uri, mongodb_DB_name, host, user, password, database):
-        # Connect to MongoDB Atlas
-        self.mongo_client = pymongo.MongoClient(mongo_uri)
-        self.mongo_db = self.mongo_client[mongodb_DB_name]
-
-        # Connect to AWS MySQL
-        self.mysql_connection = mysql.connector.connect(
-            host=host,
-            user=user,
-            password=password,
-            database=database
-        )
-        self.mysql_cursor = self.mysql_connection.cursor()
-
+    def import_data_to_mysql(self, mongo_uri, mongodb_db_name, host, user, password, database):
         try:
+            # Connect to MongoDB Atlas
+            self.mongo_client = pymongo.MongoClient(mongo_uri)
+            self.mongo_db = self.mongo_client[mongodb_db_name]
+
+            # Connect to AWS MySQL
+            self.mysql_connection = mysql.connector.connect(
+                host=host,
+                user=user,
+                password=password,
+                database=database
+            )
+            self.mysql_cursor = self.mysql_connection.cursor()
+
             # Fetch data from MongoDB Atlas
             channels_data = self.mongo_db.channels.find({})
             playlists_data = self.mongo_db.playlists.find({})
@@ -388,20 +403,21 @@ class YouTubeChannelAnalyzer:
                         INSERT INTO channels (channel_id, channel_name, channel_type, channel_status, video_count,
                                                 view_count, subs_count, publish_date, description, hidden_subs_count)
                                                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (
-                        channel['channel_id'],
-                        channel['channel_name'],
-                        channel['channel_type'],
-                        channel['channel_status'],
-                        channel['video_count'],
-                        channel['view_count'],
-                        channel['subs_count'],
-                        channel['publish_date'],
-                        channel['description'],
-                        channel['hidden_subs_count']
-                    ))
-                except mysql.connector.errors.IntegrityError:
-                    print("Duplicate entry for channel:", channel['channel_id'])
+                                              (
+                                                  channel['channel_id'],
+                                                  channel['channel_name'],
+                                                  channel['channel_type'],
+                                                  channel['channel_status'],
+                                                  channel['video_count'],
+                                                  channel['view_count'],
+                                                  channel['subs_count'],
+                                                  channel['publish_date'],
+                                                  channel['description'],
+                                                  channel['hidden_subs_count']
+                                              ))
+                    self.mysql_connection.commit()
+                except Exception as e:
+                    print(f"Error inserting channel data: {e}")
 
             # Insert playlist data into AWS MySQL
             for playlist in playlists_data:
@@ -409,21 +425,29 @@ class YouTubeChannelAnalyzer:
                     self.mysql_cursor.execute("""
                         INSERT INTO playlists (channel_id, playlist_id, playlist_name)
                                                 VALUES (%s, %s, %s)""",
-            (
-                        playlist['channel_id'],
-                        playlist['playlist_id'],
-                        playlist['playlist_name']
-                    ))
-                except mysql.connector.errors.IntegrityError:
-                    print("Duplicate entry for playlist:", playlist['playlist_id'])
+                                              (
+                                                  playlist['channel_id'],
+                                                  playlist['playlist_id'],
+                                                  playlist['playlist_name']
+                                              ))
+                    self.mysql_connection.commit()
+                except Exception as e:
+                    print(f"Error inserting playlist data: {e}")
 
+            # Insert video data into AWS MySQL
             # Insert video data into AWS MySQL
             for video in videos_data:
                 try:
+                    # Replace None values with appropriate defaults
+                    like_count = video['like_count'] if video['like_count'] is not None else 0
+                    dislike_count = video['dislike_count'] if video['dislike_count'] is not None else 0
+                    comment_count = video['comment_count'] if video['comment_count'] is not None else 0
+                    favorite_count = video['favorite_count'] if video['favorite_count'] is not None else 0
+
                     self.mysql_cursor.execute("""
                         INSERT INTO videos (channel_id, video_id, title, description, published_at, view_count,
                                             like_count, dislike_count, comment_count, favorite_count, duration,
-                                             thumbnail_url, caption_status)
+                                            thumbnail_url, caption_status)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """, (
                         video['channel_id'],
@@ -432,51 +456,61 @@ class YouTubeChannelAnalyzer:
                         video['description'],
                         video['published_at'],
                         video['view_count'],
-                        video['like_count'],
-                        video['dislike_count'],
-                        video['comment_count'],
-                        video['favorite_count'],
+                        like_count,
+                        dislike_count,
+                        comment_count,
+                        favorite_count,
                         video['duration'],
                         video['thumbnail_url'],
                         video['caption_status']
                     ))
-                except mysql.connector.errors.IntegrityError:
-                    print("Duplicate entry for video:", video['video_id'])
+                    self.mysql_connection.commit()
+                except Exception as e:
+                    print(f"Error inserting video data: {e}")
 
             # Insert comment data into AWS MySQL
             for comment in comments_data:
                 try:
-                    self.mysql_cursor.execute("""
-                        INSERT INTO comments (comment_id, video_id, commenter_name, comment_text, comment_published_at)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (
-                        comment['comment_id'],
-                        comment['video_id'],
-                        comment['commenter_name'],
-                        comment['comment_text'],
-                        comment['comment_published_at']
-                    ))
-                except mysql.connector.errors.IntegrityError:
-                    print("Duplicate entry for comment:", comment['comment_id'])
-
-            # Commit changes and close cursor/connection
-            self.mysql_connection.commit()
-            self.mysql_cursor.close()
-            self.mysql_connection.close()
-
-            print("Data imported from MongoDB to AWS RDS MySQL successfully.")
-
-        except Exception as e:
-            print("An error occurred:", e)
+                    video_id = comment['video_id']
+                    # Check if the video_id exists in the videos table
+                    self.mysql_cursor.execute("SELECT COUNT(*) FROM videos WHERE video_id = %s",
+                                              (video_id,))
+                    video_exists = self.mysql_cursor.fetchone()[0]
+                    if video_exists:
+                        self.mysql_cursor.execute("""
+                            INSERT INTO comments (comment_id, video_id, commenter_name, comment_text,
+                             comment_published_at)
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (
+                            comment['comment_id'],
+                            video_id,
+                            comment['commenter_name'],
+                            comment['comment_text'],
+                            comment['comment_published_at']
+                        ))
+                        self.mysql_connection.commit()
+                    else:
+                        print(f"Error inserting comment data: Video with video_id {video_id} does not exist.")
+                except Exception as e:
+                    print(f"Error inserting comment data: {e}")
+        finally:
+            if 'self.mysql_connection' in locals() and self.mysql_connection.is_connected():
+                self.mysql_cursor.close()
+                self.mysql_connection.close()
 
     def select_and_execute_queries(self, host, user, password, database):
         # Define the list of queries
         queries = {
             "1. What are the names of all the videos and their corresponding channels?": """
-            SELECT a.channel_name, b.title AS video_names FROM channels a INNER JOIN videos b ON a.channel_id=b.channel_id;
+            SELECT a.channel_name, b.title AS video_names 
+            FROM channels a 
+            INNER JOIN videos b ON a.channel_id=b.channel_id;
             """,
             "2. Which channels have the most number of videos, and how many videos do they have?": """
-            SELECT channel_name, video_count FROM channels WHERE video_count IN (SELECT MAX(video_count) FROM channels);
+            SELECT channel_name, video_count 
+            FROM channels 
+            WHERE video_count IN (SELECT MAX(video_count) 
+            FROM channels);
             """,
             "3. What are the top 10 most viewed videos and their respective channels?": """
             SELECT a.channel_name, b.title ,b.view_count
@@ -486,34 +520,41 @@ class YouTubeChannelAnalyzer:
             LIMIT 10;
             """,
             "4. How many comments were made on each video, and what are their corresponding video names?": """
-            SELECT a.channel_name,b.video_id,b.title,b.comment_count 
-            FROM channels a INNER JOIN videos b on a.channel_id=b.channel_id order by comment_count DESC;
+            SELECT a.channel_name, b.video_id, b.title, b.comment_count 
+            FROM channels a 
+            INNER JOIN videos b ON a.channel_id=b.channel_id 
+            ORDER BY comment_count DESC;
             """,
             "5. Which videos have the highest number of likes, and what are their corresponding channel names?": """
             SELECT a.channel_name, b.title, b.like_count
             FROM channels a
-            INNER JOIN videos b ON a.channel_id = b.channel_id
+            INNER JOIN videos b 
+            ON a.channel_id = b.channel_id
             ORDER BY b.like_count DESC
             LIMIT 10;
             """,
-            "6. What is the total number of likes and dislikes for each video, and what are their corresponding video names?": """
+            """6. What is the total number of likes and dislikes for each video, and what are their corresponding
+             video names?""": """
             SELECT a.channel_name, b.title, like_count AS total_likes, b.dislike_count AS total_dislikes
             FROM channels a
             INNER JOIN videos b ON a.channel_id = b.channel_id
             ORDER BY b.like_count DESC;
             """,
-            "7. What is the total number of views for each channel, and what are their corresponding channel names?": """
+            "7. What is the total number of views for each channel, and what are their corresponding channel names?":
+            """
             SELECT a.channel_name, SUM(b.view_count) AS total_views
             FROM channels a
             INNER JOIN videos b ON a.channel_id = b.channel_id
             GROUP BY a.channel_name;
             """,
             "8. What are the names of all the channels that have published videos in the year 2022?": """
-            SELECT DISTINCT channel_name
-            FROM channels
-            WHERE YEAR(publish_date) = 2022;
+            SELECT a.channel_name, b. title ,DATE(b.published_at)
+            FROM channels a
+            INNER JOIN videos b ON a.channel_id = b.channel_id
+            WHERE YEAR(published_at) = 2022;
             """,
-            "9. What is the average duration of all videos in each channel, and what are their corresponding channel names?": """
+            """9. What is the average duration of all videos in each channel, and what are their corresponding channel
+             names?""": """
             SELECT a.channel_name, AVG(TIME_TO_SEC(duration)) AS avg_duration_seconds
             FROM channels a
             INNER JOIN videos b ON a.channel_id = b.channel_id
@@ -590,19 +631,26 @@ class YouTubeChannelAnalyzer:
         st.sidebar.title("YouTube API Connection")
 
         # User inputs
-        api_key = st.sidebar.text_input("Enter your YouTube Data API key:", placeholder="Enter your YouTube Data API key here", type="password")
+        api_key = st.sidebar.text_input("Enter your YouTube Data API key:",
+                                        placeholder="Enter your YouTube Data API key here", type="password")
 
         st.sidebar.title("MongoDB Atlas Database Connection")
 
-        mongodb_URI = st.sidebar.text_input("Enter your MongoDB Atlas URI:", placeholder="Enter your MongoDB Atlas URI here", type="password")
-        mongodb_DB_name = st.sidebar.text_input("Enter your MongoDB database name:", placeholder="Enter your MongoDB database name here")
+        mongodb_uri = st.sidebar.text_input("Enter your MongoDB Atlas URI:",
+                                            placeholder="Enter your MongoDB Atlas URI here", type="password")
+        mongodb_db_name = st.sidebar.text_input("Enter your MongoDB database name:",
+                                                placeholder="Enter your MongoDB database name here")
 
         st.sidebar.title("AWS MySQL Database Connection")
 
-        mysql_host = st.sidebar.text_input("Enter your AWS/MySQL host:", placeholder="Enter your AWS/MySQL host here")
-        mysql_user = st.sidebar.text_input("Enter your AWS/MySQL username:", placeholder="Enter your AWS/MySQL username here")
-        mysql_password = st.sidebar.text_input("Enter your AWS/MySQL password:", placeholder="Enter your AWS/MySQL password here", type="password")
-        mysql_database = st.sidebar.text_input("Enter your AWS/MySQL database name:", placeholder="Enter your AWS/MySQL database name here")
+        mysql_host = st.sidebar.text_input("Enter your AWS/MySQL host:",
+                                           placeholder="Enter your AWS/MySQL host here")
+        mysql_user = st.sidebar.text_input("Enter your AWS/MySQL username:",
+                                           placeholder="Enter your AWS/MySQL username here")
+        mysql_password = st.sidebar.text_input("Enter your AWS/MySQL password:",
+                                               placeholder="Enter your AWS/MySQL password here", type="password")
+        mysql_database = st.sidebar.text_input("Enter your AWS/MySQL database name:",
+                                               placeholder="Enter your AWS/MySQL database name here")
 
         num_channels = st.number_input("Enter the number of channels to analyze:", min_value=1, max_value=10,
                                        step=1)
@@ -620,21 +668,20 @@ class YouTubeChannelAnalyzer:
 
             output = analyzer.analyze_channels(channel_names)
 
-
-
             # Insert data into MongoDB Atlas
-            analyzer.insert_data_to_mongodb(output, mongodb_URI, mongodb_DB_name)
+            analyzer.insert_data_to_mongodb(output, mongodb_uri, mongodb_db_name)
 
             # Create tables in MySQL
             analyzer.create_mysql_tables(mysql_host, mysql_user, mysql_password, mysql_database)
 
             # Import data from MongoDB to MySQL
-            analyzer.import_data_to_mysql(mongodb_URI, mongodb_DB_name, mysql_host, mysql_user, mysql_password,
-                                      mysql_database)
+            analyzer.import_data_to_mysql(mongodb_uri, mongodb_db_name, mysql_host, mysql_user, mysql_password,
+                                          mysql_database)
 
             # Select queries section
         st.sidebar.title("Select Queries")
         analyzer.select_and_execute_queries(mysql_host, mysql_user, mysql_password, mysql_database)
+
 
 if __name__ == "__main__":
     # Create an instance of YouTubeChannelAnalyzer
