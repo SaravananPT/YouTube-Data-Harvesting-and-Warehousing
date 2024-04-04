@@ -284,6 +284,8 @@ class YouTubeChannelAnalyzer:
             if channel_id:
                 output[channel_name] = {}
                 output[channel_name]['channel_id'] = channel_id
+                channel_details = self.get_channel_details(channel_id)
+                output[channel_name]['channel_details'] = channel_details
                 playlist_ids = self.get_all_playlist_ids(channel_id)
                 if playlist_ids:
                     output[channel_name]['playlist_ids'] = playlist_ids
@@ -314,9 +316,6 @@ class YouTubeChannelAnalyzer:
 
                     video_comments = self.get_video_comments(video_ids)
                     output[channel_name]['video_comments'] = video_comments
-
-                channel_details = self.get_channel_details(channel_id)
-                output[channel_name]['channel_details'] = channel_details
             else:
                 output[channel_name] = "Channel not found."
         pprint.pprint(output)
