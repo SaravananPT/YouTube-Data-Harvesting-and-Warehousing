@@ -47,8 +47,7 @@ class YouTubeChannelAnalyzer:
             if 'items' in response:
                 channel_id = response['items'][0]['id']['channelId']
                 return channel_id
-            else:
-                return None
+            return None
         except HttpError as e:
             print("An error occurred:", e)
             return None
@@ -79,8 +78,7 @@ class YouTubeChannelAnalyzer:
                     'hidden_subs_count': item['statistics'].get('hiddenSubscriberCount', False)
                 }
                 return channel_info
-            else:
-                return None
+            return None
         except HttpError as e:
             print("An error occurred:", e)
             return None
