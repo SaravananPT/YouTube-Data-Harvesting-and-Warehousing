@@ -177,8 +177,42 @@ class YouTubeChannelAnalyzer:
 
     def get_video_details(self, video_ids, channel_id):
         """
-            Retrieves video details from YouTube from both directly from channel and playlists.
-                """
+        Retrieves video details from YouTube from both directly from channel and playlists.
+        """
+
+        def iso8601_to_hh_mm_ss(duration_str):
+            # Check if the duration string is empty
+            if not duration_str:
+                return '00:00:00'
+
+            # Remove the 'PT' prefix
+            temp_duration = duration_str[2:]
+
+            # Initialize variables to store hours, minutes, and seconds
+            hours = 0
+            minutes = 0
+            seconds = 0
+
+            # Check if 'H' is present to parse hours
+            if 'H' in temp_duration:
+                hours, temp_duration = temp_duration.split('H')
+                hours = int(hours)
+
+            # Check if 'M' is present to parse minutes
+            if 'M' in temp_duration:
+                minutes, temp_duration = temp_duration.split('M')
+                minutes = int(minutes)
+
+            # Check if 'S' is present to parse seconds
+            if 'S' in temp_duration:
+                seconds = temp_duration.replace('S', '')
+                seconds = int(seconds)
+
+            # Format hours, minutes, and seconds
+            formatted_duration = '{:02d}:{:02d}:{:02d}'.format(hours, minutes, seconds)
+
+            return formatted_duration
+
         video_details = []
         for video_id in video_ids:
             try:
@@ -199,7 +233,8 @@ class YouTubeChannelAnalyzer:
                         comment_count = item['statistics'].get('commentCount', 'N/A')
                         favorite_count = item['statistics'].get('favoriteCount', 'N/A')
                         duration = item['contentDetails']['duration']
-                        duration = duration[2:].replace('H', ':').replace('M', ':').replace('S', '')
+                        duration = iso8601_to_hh_mm_ss(duration)  # Convert duration to HH:MM:SS format
+
                         thumbnail_url = item['snippet']['thumbnails']['default']['url']
                         caption_status = item['contentDetails'].get('caption', 'N/A')
 
@@ -758,11 +793,11 @@ class YouTubeChannelAnalyzer:
             """
             9. What is the average duration of all videos in each channel & what are their corresponding channel names?
             """: """
-            SELECT a.channel_name, AVG(TIME_TO_SEC(duration)) / 3600 AS avg_duration_hours
+            SELECT a.channel_name, AVG(TIME_TO_SEC(duration)) / 60 AS avg_duration_minutes
             FROM channels a
             INNER JOIN videos b ON a.channel_id = b.channel_id
             GROUP BY a.channel_name
-            ORDER BY avg_duration_hours DESC;
+            ORDER BY avg_duration_minutes DESC;
             """,
             "10. Which videos have the highest number of comments, and what are their corresponding channel names?": """
             SELECT a.channel_name, b.title, b.comment_count
